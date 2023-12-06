@@ -1,0 +1,688 @@
+package by.bsuir.tools;
+
+import by.bsuir.domain.*;
+import by.bsuir.plugins.ActionParameterType;
+import by.bsuir.plugins.Point;
+import by.bsuir.plugins.ReflectionType;
+import by.bsuir.plugins.SearchClasses;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.ActionListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.List;
+import java.util.*;
+
+public class ShapeWindow extends JFrame {
+
+    // getter for the map structure of the relationship between shape identifiers and edit buttons
+    public Map <UUID, JButton> getFiguresButtonsMap() {
+        return figuresButtonsMap;
+    }
+
+    // map structure of the relationship between shape identifiers and editing buttons
+    private Map <UUID, JButton> figuresButtonsMap = new HashMap<>();
+
+    // panel with tools for creating shapes
+    private JPanel leftButtonPanel;
+
+    // panel with tools for editing created shapes
+    private JPanel rightButtonPanel;
+
+    // stores the color from the palette for the current shape
+    private Color selectedColor;
+
+    // stores the size for editing the current figure
+    private Integer selectedSize;
+
+    // figure reflection type
+    ReflectionType reflectionType;
+
+    // stores a list of drawn shapes
+    private ShapeList shapeList;
+
+    private ShapeDrawToolsPanel shapeDrawToolsPanel;
+
+    // constructor of the ShapeWindow class
+    public ShapeWindow(String title) throws HeadlessException {
+        this.shapeList = new ShapeList();
+        this.setTitle(title);
+
+        setConfig();
+        setMainPanel();
+    }
+
+    // method for creating an application window
+    private void setConfig() {
+
+        // set the window size
+        setSize(1280, 800);
+
+        // set the condition for closing the window
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+    }
+
+    // method for displaying the main panel
+    private void setMainPanel() {
+        setDrawToolsPanel();
+
+        staticFigures();
+
+        setLeftButtonPanel();
+        setRightButtonPanel();
+    }
+
+    // method for statically initializing shapes
+    private void staticFigures() {
+
+        shapeList.add(new Circle(180, new Point(80, 400), Color.RED));
+        shapeList.add(new Line(new Point(120, 240), new Point(660, 410), Color.BLUE));
+        shapeList.add(new RegularPolygon(190, new Point(240, 140), 6, Color.DARK_GRAY));
+        shapeList.add(new RegularPolygon(165, new Point(400, 550), 8, Color.GRAY));
+        shapeList.add(new TriangleIsosceles(200, new Point(580, 160), Color.MAGENTA));
+        shapeList.add(new TriangleRectangular(170, new Point(640, 480), Color.BLACK));
+    }
+
+    // method for displaying the active area
+    private void setDrawToolsPanel() {
+        shapeDrawToolsPanel = new ShapeDrawToolsPanel(shapeList);
+        shapeDrawToolsPanel.setPreferredSize(new Dimension(880, 800));
+        add(shapeDrawToolsPanel, BorderLayout.CENTER);
+    }
+
+    // method for displaying a button bar for creating new shapes
+    private void setLeftButtonPanel() {
+
+        // setting the left panel
+        leftButtonPanel = new JPanel();
+        leftButtonPanel.setBorder(BorderFactory.createEtchedBorder());
+        leftButtonPanel.setPreferredSize(new Dimension(200, 800));
+
+        List<Class> shapeClasses = getShapeClasses();
+        for (Class shapeClass : shapeClasses) {
+            JButton jButton = new JButton(shapeClass.getSimpleName());
+            jButton.setPreferredSize(new Dimension(160, 35));
+            jButton.addActionListener(getButtonActionListener(shapeClass));
+            leftButtonPanel.add(jButton);
+        }
+
+        // button to clear the active area of the program
+        JButton jButton = new JButton("REMOVE ALL");
+        jButton.setPreferredSize(new Dimension(160, 35));
+        jButton.addActionListener(e -> removeAllShapes());
+        leftButtonPanel.add(jButton);
+
+        add(leftButtonPanel, BorderLayout.WEST);
+    }
+
+    // method for displaying a button bar for editing created shapes
+    private void setRightButtonPanel() {
+
+        // setting up the right panel
+        rightButtonPanel = new JPanel();
+        rightButtonPanel.setBorder(BorderFactory.createEtchedBorder());
+        rightButtonPanel.setPreferredSize(new Dimension(200, 800));
+
+        for (int i = 0; i < shapeList.getShapeList().size(); i++) {
+
+            int index = i;
+
+            String buttonName = shapeList.getShapeList().get(index).getClass().getSimpleName();
+            addButtonsToRightPanel(buttonName, index);
+        }
+
+        add(rightButtonPanel, BorderLayout.EAST);
+    }
+
+    // method that adds buttons for editing created shapes and redrawing the right panel
+    private void repaintRightPanel(String buttonName, int index) {
+        addButtonsToRightPanel(buttonName, index);
+
+        // redraw the right panel
+        rightButtonPanel.revalidate();
+        rightButtonPanel.repaint();
+    }
+
+    // method for generating new buttons for editing shapes on the right panel
+    private void addButtonsToRightPanel(String buttonName, int index) {
+        JButton jButton = new JButton((index + 1) + "." + buttonName);
+        jButton.setPreferredSize(new Dimension(160, 35));
+
+        // deleting a figure is done by clicking the right mouse button
+        jButton.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e)) {
+                    editShape(jButton, ActionParameterType.REMOVE);
+                }
+            }
+        });
+
+        jButton.addActionListener(e -> buildEditDialog(jButton));
+
+        // add a button to the "button - shape" correspondence table
+        figuresButtonsMap.put(shapeList.getShapeList().get(index).getUUID(), jButton);
+
+        rightButtonPanel.add(jButton);
+    }
+
+    // method for removing the last shape from the active area (along with the edit button)
+    private void removeAllShapes() {
+        while (!shapeList.getShapeList().isEmpty()) {
+            shapeList.remove(shapeList.size() - 1);
+            rightButtonPanel.remove(shapeList.size());
+
+            rightButtonPanel.revalidate();
+            repaint();
+        }
+    }
+
+    // method for removing a shape from the active area by its index (along with the edit button)
+    private void editShape(JButton jButton, ActionParameterType actionParameterType) {
+
+        int shapeIndex = 0;
+        Map<UUID, JButton> buttonMap = getFiguresButtonsMap();
+
+        // find the UUID of the button in the button map
+        for (Map.Entry<UUID, JButton> entry : buttonMap.entrySet()) {
+            if (entry.getValue() == jButton) {
+                UUID uuid = entry.getKey();
+
+                for (int i = 0; i < shapeList.getShapeList().size(); i++) {
+                    if (shapeList.getShapeList().get(i).getUUID().equals(uuid)) {
+                        shapeIndex = i;
+                        break;
+                    }
+                }
+
+                // change the color of an existing shape
+                if (actionParameterType.equals(ActionParameterType.COLOR_CHANGE)) {
+                    shapeList.getShapeList().get(shapeIndex).setColor(selectedColor);
+                    repaint();
+                }
+
+                // resizing an existing shape
+                if (actionParameterType.equals(ActionParameterType.SIZE_CHANGE)) {
+
+                    String simpleName = shapeList.getShapeList().get(shapeIndex).getClass().getSimpleName();
+                    Class shapeClass = shapeList.getShapeList().get(shapeIndex).getClass();
+
+                    // Line class objects are processed separately
+                    if (simpleName.equals("Line")) {
+                        editLine(shapeClass, shapeIndex, uuid);
+                    }
+
+                    // processing of Circle type shapes, as well as shapes that inherit Polygon2D, is carried out in a separate way
+                    else {
+
+                        MyShape shortPath = shapeList.getShapeList().get(shapeIndex);
+                        MyShape newShape = null;
+
+                        if (simpleName.equals("Circle")) {
+                            newShape = new Circle(selectedSize, shortPath.getCenter(), shortPath.getColor());
+                        }
+                        else if (simpleName.equals("RegularPolygon")) {
+                            newShape = new RegularPolygon(selectedSize, shortPath.getCenter(), shortPath.getN(), shortPath.getColor());
+                        }
+                        else if (simpleName.equals("TriangleIsosceles")) {
+                            newShape = new TriangleIsosceles(selectedSize, shortPath.getCenter(), shortPath.getColor());
+                        }
+                        else if (simpleName.equals("TriangleRectangular")) {
+                            newShape = new TriangleRectangular(selectedSize, shortPath.getCenter(), shortPath.getColor());
+                        }
+
+                        // replacing a new figure in place of the old one before making changes
+                        shapeList.getShapeList().set(shapeIndex, newShape);
+
+                        // replacing the UUID of the new shape for the edit button to work correctly
+                        shapeList.getShapeList().get(shapeIndex).setUUID(uuid);
+
+                        repaint();
+                    }
+                }
+
+                // mirror reflection of an existing shape
+                if (actionParameterType.equals(ActionParameterType.MIRROR_REFLECTION)) {
+
+                    // getting the class name
+                    String simpleName = shapeList.getShapeList().get(shapeIndex).getClass().getSimpleName();
+                    Class shapeClass = shapeList.getShapeList().get(shapeIndex).getClass();
+
+                    // Line class objects are processed separately
+                    if (simpleName.equals("Line")) {
+                        editLine(shapeClass, shapeIndex, uuid);
+                    }
+
+                    // processing of Circle type shapes, as well as shapes that inherit Polygon2D, is carried out in a separate way
+                    else {
+                        MyShape newShape = null;
+                        MyShape shortPath = shapeList.getShapeList().get(shapeIndex);
+                        double radius = shortPath.getRadius();
+                        Color color = shortPath.getColor();
+                        ReflectionType optionalPosition = rotateShape(shortPath.getReflectionType());
+
+                        double x = shortPath.getCenter().getX();
+                        double y = shortPath.getCenter().getY();
+
+                        // reflection along the X axis in the positive direction (to the right) (x + radius)
+                        if (reflectionType.equals(ReflectionType.RIGHT)) {
+                            if (simpleName.equals("Circle")) {
+                                newShape = new Circle(radius, new Point((x + radius), y), color);
+                            } else if (simpleName.equals("RegularPolygon")) {
+                                newShape = new RegularPolygon(radius, new Point((x + radius), y), shortPath.getN(), optionalPosition, color);
+                            } else if (simpleName.equals("TriangleIsosceles")) {
+                                newShape = new TriangleIsosceles(radius, new Point((x + radius), y), optionalPosition, color);
+                            } else if (simpleName.equals("TriangleRectangular")) {
+                                newShape = new TriangleRectangular(radius, new Point((x + radius), y), optionalPosition, color);
+                            }
+                        }
+
+                        // reflection along the X axis in the negative direction (to the left) (x - radius)
+                        if (reflectionType.equals(ReflectionType.LEFT)) {
+                            if (simpleName.equals("Circle")) {
+                                newShape = new Circle(radius, new Point((x - radius), y), color);
+                            } else if (simpleName.equals("RegularPolygon")) {
+                                newShape = new RegularPolygon(radius, new Point((x - radius), y), shortPath.getN(), optionalPosition, color);
+                            } else if (simpleName.equals("TriangleIsosceles")) {
+                                newShape = new TriangleIsosceles(radius, new Point((x - radius), y), optionalPosition, color);
+                            } else if (simpleName.equals("TriangleRectangular")) {
+                                newShape = new TriangleRectangular(radius, new Point((x - radius), y), optionalPosition, color);
+                            }
+                        }
+
+                        // reflection along the Y axis in the positive direction (down) (x + radius)
+                        if (reflectionType.equals(ReflectionType.DOWN)) {
+                            if (simpleName.equals("Circle")) {
+                                newShape = new Circle(radius, new Point(x, (y + radius)), color);
+                            } else if (simpleName.equals("RegularPolygon")) {
+                                newShape = new RegularPolygon(radius, new Point(x, (y + radius)), shortPath.getN(), optionalPosition, color);
+                            } else if (simpleName.equals("TriangleIsosceles")) {
+                                newShape = new TriangleIsosceles(radius, new Point(x, (y + radius)), optionalPosition, color);
+                            } else if (simpleName.equals("TriangleRectangular")) {
+                                newShape = new TriangleRectangular(radius, new Point(x, (y + radius)), optionalPosition, color);
+                            }
+                        }
+
+                        // reflection along the Y axis in the negative direction (up) (setY() - radius)
+                        if (reflectionType.equals(ReflectionType.UP)) {
+                            if (simpleName.equals("Circle")) {
+                                newShape = new Circle(radius, new Point(x, (y - radius)), color);
+                            } else if (simpleName.equals("RegularPolygon")) {
+                                newShape = new RegularPolygon(radius, new Point(x, (y - radius)), shortPath.getN(), optionalPosition, color);
+                            } else if (simpleName.equals("TriangleIsosceles")) {
+                                newShape = new TriangleIsosceles(radius, new Point(x, (y - radius)), optionalPosition, color);
+                            } else if (simpleName.equals("TriangleRectangular")) {
+                                newShape = new TriangleRectangular(radius, new Point(x, (y - radius)), optionalPosition, color);
+                            }
+                        }
+
+                        // replacing a new figure in place of the old one before making changes
+                        shapeList.getShapeList().set(shapeIndex, newShape);
+
+                        // replacing the UUID of the new shape for the edit button to work correctly
+                        shapeList.getShapeList().get(shapeIndex).setUUID(uuid);
+
+                        repaint();
+                    }
+                }
+
+                // deleting the current figure
+                if (actionParameterType.equals(ActionParameterType.REMOVE)) {
+
+                    // remove the figure from the list
+                    shapeList.remove(shapeIndex);
+
+                    // remove the button from the parent component
+                    Container parent = jButton.getParent();
+                    if (parent != null) {
+                        parent.remove(jButton);
+                        parent.revalidate();
+                        parent.repaint();
+
+                        // remove the button for editing the current figure
+                        shapeDrawToolsPanel.repaint();
+                    }
+                }
+
+                break;
+            }
+        }
+    }
+
+    // method for editing line position
+    private void editLine(Class shapeClass, int shapeIndex, UUID uuid) {
+
+        List<String> shapePropertiesNames;
+
+        try {
+            shapePropertiesNames = getShapePropertyNames(shapeClass);
+        } catch (IllegalAccessException | NoSuchFieldException e1) {
+            JOptionPane.showMessageDialog(this, "Shape inheritor should have 'propertyNames' field.", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        Map<String, JSpinner> shapeFields = new HashMap<>();
+        buildShapeFieldsDialog(shapeFields, shapePropertiesNames);
+
+        try {
+            MyShape newShape = buildNewShape(shapeClass, shapeFields);
+
+            // setting the color of the created shape
+            newShape.setColor(selectedColor);
+
+            // replacing a new figure in place of the old one before making changes
+            shapeList.getShapeList().set(shapeIndex, newShape);
+
+            // replacing the UUID of the new shape for the edit button to work correctly
+            shapeList.getShapeList().get(shapeIndex).setUUID(uuid);
+
+            // redrawing the active area of the program window
+            repaint();
+
+        } catch (NoSuchMethodException e1) {
+            JOptionPane.showMessageDialog(this, "Shape inheritor should have 'constructShape' method.", "Error", JOptionPane.ERROR_MESSAGE);
+        } catch (IllegalAccessException e1) {
+            JOptionPane.showMessageDialog(this, "'constructShape' method should be public static.", "Error", JOptionPane.ERROR_MESSAGE);
+        } catch (InvocationTargetException e1) {
+            JOptionPane.showMessageDialog(this, e1, "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    // method for determining the optimal position of the mirrored figure
+    private ReflectionType rotateShape(ReflectionType currentReflectionType) {
+
+        // if the shapes are mirrored vertically
+        if (reflectionType.equals(ReflectionType.UP) || reflectionType.equals(ReflectionType.DOWN)) {
+            if (currentReflectionType.equals(ReflectionType.NONE) || currentReflectionType.equals(ReflectionType.UP)) {
+                return ReflectionType.DOWN;
+            } else if (currentReflectionType.equals(ReflectionType.DOWN)) {
+                return ReflectionType.UP;
+            }
+        }
+
+        // if the shapes are mirrored horizontally
+        if (reflectionType.equals(ReflectionType.LEFT) || reflectionType.equals(ReflectionType.RIGHT)) {
+            if (currentReflectionType.equals(ReflectionType.LEFT)) {
+                return ReflectionType.RIGHT;
+            } else if (currentReflectionType.equals(ReflectionType.RIGHT)) {
+                return ReflectionType.LEFT;
+            }
+        }
+
+        return currentReflectionType;
+    }
+
+    // method that monitors each button that creates a shape
+    private ActionListener getButtonActionListener(Class shapeClass) {
+
+        ActionListener actionListener = e -> {
+
+            List<String> shapePropertiesNames;
+
+            try {
+                shapePropertiesNames = getShapePropertyNames(shapeClass);
+            } catch (IllegalAccessException | NoSuchFieldException e1) {
+                JOptionPane.showMessageDialog(this, "Shape inheritor should have 'propertyNames' field.", "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            Map<String, JSpinner> shapeFields = new HashMap<>();
+            buildShapeFieldsDialog(shapeFields, shapePropertiesNames);
+
+            try {
+                MyShape newMyShape = buildNewShape(shapeClass, shapeFields);
+
+                // setting the color of the created shape
+                newMyShape.setColor(selectedColor);
+
+                // adding a shape to the list of shapes
+                shapeList.add(newMyShape);
+
+                // creating a new button on the editing panel corresponding to this shape
+                repaintRightPanel(shapeClass.getSimpleName(), (shapeList.size() - 1));
+
+                // redrawing the active area of the program window
+                repaint();
+
+            } catch (NoSuchMethodException e1) {
+                JOptionPane.showMessageDialog(this, "Shape inheritor should have 'constructShape' method.", "Error", JOptionPane.ERROR_MESSAGE);
+            } catch (IllegalAccessException e1) {
+                JOptionPane.showMessageDialog(this, "'constructShape' method should be public static.", "Error", JOptionPane.ERROR_MESSAGE);
+            } catch (InvocationTargetException e1) {
+                JOptionPane.showMessageDialog(this, e1, "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        };
+        return actionListener;
+    }
+
+    // method that retrieves shape classes from by.bsuir.domain
+    private List<Class> getShapeClasses() {
+
+        String shapePackageName = "by.bsuir.domain";
+        List<Class> shapeClasses = new ArrayList<>();
+
+        try {
+            shapeClasses = SearchClasses.getClassesFromPackage(shapePackageName, MyShape.class);
+        } catch (IOException | ClassNotFoundException e) {
+            JOptionPane.showMessageDialog(ShapeWindow.this, "The error while trying to extract classes from '" + shapePackageName + "' package", "Error", JOptionPane.ERROR_MESSAGE);
+        }
+
+        return shapeClasses;
+    }
+
+    // method that gets property names for the MyShape class
+    private List<String> getShapePropertyNames(Class shapeName) throws NoSuchFieldException, IllegalAccessException {
+
+        Field field = shapeName.getField("propertyNames");
+        List<String> propertyNames = (List<String>) field.get(null);
+
+        return propertyNames;
+    }
+
+    // method that creates a form fields dialog and fills in the fields for the shape
+    private void buildShapeFieldsDialog(Map<String, JSpinner> shapeFields, List<String> shapePropertiesNames) {
+
+        List<Component> windowFields = new ArrayList<>();
+
+        for (String propertyName : shapePropertiesNames) {
+            JLabel fieldLabel = new JLabel(propertyName);
+            JSpinner numberSpinner = new JSpinner(new SpinnerNumberModel());
+            shapeFields.put(propertyName, numberSpinner);
+            windowFields.add(fieldLabel);
+            windowFields.add(numberSpinner);
+        }
+
+        // add color selection using JColorChooser
+        JLabel colorLabel = new JLabel("Color");
+        JButton colorButton = new JButton("Choose Color");
+        colorButton.addActionListener(e -> selectedColor = JColorChooser.showDialog(this, "Choose Color", Color.BLACK));
+        windowFields.add(colorLabel);
+        windowFields.add(colorButton);
+
+        JOptionPane.showConfirmDialog(this, windowFields.toArray(), "Enter your params", JOptionPane.PLAIN_MESSAGE);
+    }
+
+    // method that creates a dialog box for editing the shape
+    private void buildEditDialog(JButton jButton) {
+
+        List<Component> windowFields = new ArrayList<>();
+
+        JButton colorButton = new JButton("Change color");
+        colorButton.addActionListener(e -> {
+
+            // select a color from the palette and transfer it to a global variable
+            selectedColor = JColorChooser.showDialog(this, "Choose Color", Color.BLACK);
+
+            // close the dialog after choosing a color
+            ((Window) SwingUtilities.getRoot(colorButton)).dispose();
+
+            // call the figure editing method
+            editShape(jButton, ActionParameterType.COLOR_CHANGE);
+        });
+
+        JButton sizeButton = new JButton("Change size");
+        sizeButton.addActionListener(e -> {
+
+            // close the dialog after selecting the button
+            ((Window) SwingUtilities.getRoot(sizeButton)).dispose();
+
+            // check if the figure belongs to an acceptable class
+            if (foundLineClass(jButton).equals(Boolean.FALSE)) {
+
+                // error handling when entering a new size value
+                try {
+
+                    String inputString = "";
+
+                    do {
+                        inputString = JOptionPane.showInputDialog(this, "Enter new size:", "Change Size", JOptionPane.PLAIN_MESSAGE);
+                    } while (inputString.isBlank() || inputString.isEmpty());
+
+                    // save the new shape size to a global variable
+                    selectedSize = Integer.parseInt(inputString);
+
+                    // catch the error
+                } catch (Exception exc) {
+
+                }
+            }
+
+            // calling the figure editing method from the "size editing" parameters
+            editShape(jButton, ActionParameterType.SIZE_CHANGE);
+        });
+
+        JButton mirrorButton = new JButton("Mirror reflection");
+        mirrorButton.addActionListener(e -> {
+
+            // close the dialog after selecting the button
+            ((Window) SwingUtilities.getRoot(mirrorButton)).dispose();
+
+            // error handling during menu operation
+            try {
+
+                // check if the figure belongs to an acceptable class
+                if (foundLineClass(jButton).equals(Boolean.FALSE)) {
+
+                    // calling a method with buttons for the direction of mirroring a figure
+                    mirrorReflectionWindow(jButton);
+                } else {
+
+                    // call the method for editing a Line type figure
+                    editShape(jButton, ActionParameterType.SIZE_CHANGE);
+                }
+
+                // catch the error
+            } catch (Exception exc) {
+
+            }
+        });
+
+        windowFields.add(colorButton);
+        windowFields.add(sizeButton);
+        windowFields.add(mirrorButton);
+
+        JOptionPane.showConfirmDialog(this, windowFields.toArray(), "Select an action", JOptionPane.PLAIN_MESSAGE);
+    }
+
+    // method for displaying options for the direction of mirror reflection of a figure
+    private void mirrorReflectionWindow(JButton jButton) {
+        List<Component> reflectionWindowFields = new ArrayList<>();
+
+        JButton upReflectionButton = new JButton("Up");
+        upReflectionButton.addActionListener(e -> {
+
+            reflectionType = ReflectionType.UP;
+
+            // close the dialog after selecting the button
+            ((Window) SwingUtilities.getRoot(upReflectionButton)).dispose();
+
+            // call the figure editing method
+            editShape(jButton, ActionParameterType.MIRROR_REFLECTION);
+        });
+
+        JButton downReflectionButton = new JButton("Down");
+        downReflectionButton.addActionListener(e -> {
+
+            reflectionType = ReflectionType.DOWN;
+
+            // close the dialog after selecting the button
+            ((Window) SwingUtilities.getRoot(downReflectionButton)).dispose();
+
+            // call the figure editing method
+            editShape(jButton, ActionParameterType.MIRROR_REFLECTION);
+        });
+
+        JButton leftReflectionButton = new JButton("Left");
+        leftReflectionButton.addActionListener(e -> {
+
+            reflectionType = ReflectionType.LEFT;
+
+            // close the dialog after selecting the button
+            ((Window) SwingUtilities.getRoot(leftReflectionButton)).dispose();
+
+            // call the figure editing method
+            editShape(jButton, ActionParameterType.MIRROR_REFLECTION);
+        });
+
+        JButton rightReflectionButton = new JButton("Right");
+        rightReflectionButton.addActionListener(e -> {
+
+            reflectionType = ReflectionType.RIGHT;
+
+            // close the dialog after selecting the button
+            ((Window) SwingUtilities.getRoot(rightReflectionButton)).dispose();
+
+            // call the figure editing method
+            editShape(jButton, ActionParameterType.MIRROR_REFLECTION);
+        });
+
+        reflectionWindowFields.add(upReflectionButton);
+        reflectionWindowFields.add(downReflectionButton);
+        reflectionWindowFields.add(leftReflectionButton);
+        reflectionWindowFields.add(rightReflectionButton);
+
+        JOptionPane.showConfirmDialog(this, reflectionWindowFields.toArray(), "Select an action", JOptionPane.PLAIN_MESSAGE);
+    }
+
+    // method for checking whether the current figure belongs to the Line class
+    private Boolean foundLineClass(JButton jButton) {
+
+        Map<UUID, JButton> buttonMap = getFiguresButtonsMap();
+
+        // find the UUID of the button in the button map
+        for (Map.Entry<UUID, JButton> entry : buttonMap.entrySet()) {
+            if (entry.getValue() == jButton) {
+                UUID uuid = entry.getKey();
+
+                for (int i = 0; i < shapeList.getShapeList().size(); i++) {
+                    if (shapeList.getShapeList().get(i).getUUID().equals(uuid)) {
+                        if (shapeList.getShapeList().get(i).getClass().getSimpleName().equals("Line")) {
+                            return Boolean.TRUE;
+                        }
+                    }
+                }
+            }
+        }
+
+        return Boolean.FALSE;
+    }
+
+    // method that creates a new figure
+    private MyShape buildNewShape(Class shapeClass, Map<String, JSpinner> shapeFields) throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
+
+        Method constructShapeMethod = shapeClass.getMethod("constructShape", Map.class);
+
+        Map<String, Integer> shapeProperties = new HashMap<>();
+
+        for (Map.Entry<String, JSpinner> shapeField : shapeFields.entrySet()) {
+            shapeProperties.put(shapeField.getKey(), (Integer) shapeField.getValue().getValue());
+        }
+
+        return (MyShape) constructShapeMethod.invoke(null, shapeProperties);
+    }
+}
