@@ -1,0 +1,4 @@
+rootProject.name = 'OOPTaDS-GraphicEditor'
+include 'GraphicEditor-1.2'
+include 'GraphicEditor-2.6'
+
